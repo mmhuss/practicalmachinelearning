@@ -1,0 +1,157 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "mmhuss"
+date: "22 September 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_ws, echo=FALSE}
+load("M:/Documents/Coursera/Practical_Machine_Learning/Course_Project/svmWs.RData")
+```
+
+## Introduction
+
+The goal of this study is to predict the execution quality of some fitness related exercises. To do so, data from accelerometers attached to the belt, forearm and arm of six participants and a dumbell will be analysed using different machine learning algorithms. The data itself comprises a training set with 19622 observations and a test set with 20 observations. A total of 160 predictors was collected, including the names of the participants and several timestamps.
+
+
+## Preprocessing 
+
+```{r readin}
+training_raw <- read.csv("pml-training.csv")
+testing_raw <- read.csv("pml-testing.csv")
+```
+
+Since a test set and enough observations are present, the general approach was to split the training set into a set to train the models and a set for validation. Depending on the results from the validation set the model parameters were then adapted and the process repeated.
+
+
+```{r caret, message=FALSE, warning=FALSE, include=FALSE}
+library(caret)
+```
+```{r sets}
+inTrain <- createDataPartition(y=training_raw$classe, p = 0.7, list = FALSE)
+train <- training_raw[inTrain,]
+val <- training_raw[-inTrain,]
+```
+
+Now some basic preprocessing was done on the training and validation set. Columns containing NAs and predictors with no or very little variance and thus no explanatory power were removed from the data sets. Furthermore, the first seven columns were of no use for the question at hand and were removed as well. All assumptions about the data were made on the training set and then transfered to the validation data. 
+
+
+```{r preproc}
+train <- train[,8:dim(train)[2]]
+val <- val[,8:dim(val)[2]]
+
+nona <- complete.cases(t(train))
+train <- train[,nona]
+val <- val[,nona]
+
+zerovar <- nearZeroVar(train)
+train <- train[,-zerovar]
+val <- val[,-zerovar]
+```
+
+## Model building and error assessment
+
+Since both belong to the top performing algorithms in many competitions, a Random Forest and a boosting based model were built on the training set. For boosting, Generalized Boosted Regression Modeling, as implemented in the gbm package, was used. Furthermore, a Support Vector Machine (SVM) from the e1071 package was fit for comparison with the other two approaches. The Out of Sample Error of all models was assessed on the validation data set. 
+
+Regarding internal validation, a 3-fold cross validation was performed for the gbm and a 10-fold cross validation for the SVM. Random Forest features an out-of-bag error estimate, so no further validation was done. 
+
+# Random Forest
+
+```{r randomforest, message=FALSE, warning=FALSE, include=FALSE}
+library(randomForest)
+```
+
+```{r randomForest}
+modFit_rf <- randomForest(classe ~., data = train, ntree = 100)
+
+pred_rf <- predict(modFit_rf, val)
+confma <- confusionMatrix(pred_rf, val$classe)
+confma$overall["Accuracy"]
+plot(modFit_rf, main = "Fig.1: Dependency between ntree and error rate")
+```
+
+The Random Forest algorithm performed very well with an out of sample error of less than 1% on the validation set. The accuracy did only decrease slightly when using less than 50 trees to fit the model (see Fig. 1). So to prevent any overfitting, 100 trees were used instead of the default 500.  
+
+
+# Generalized Boosted Regression Modeling
+
+```{r gbm_package, message=FALSE, warning=FALSE, include=FALSE}
+library(gbm)
+```
+
+```{r gbm}
+modFit_gbm <- train(classe ~., data = train, method = "gbm", 
+                    trControl = trainControl(method = "cv", number = 3), verbose=FALSE)
+
+pred_gbm <- predict(modFit_gbm, val)
+
+confma_gbm <- confusionMatrix(pred_gbm, val$classe)
+confma_gbm$overall["Accuracy"]
+```
+
+The accuracy of the gbm model is also very good, but not quite as good as the Random Forest model.
+
+## Support Vector Machine Classification
+
+```{r SVM_package, message=FALSE, warning=FALSE, include=FALSE}
+library(e1071)
+```
+
+```{r SVM}
+x <- train[,-53]
+y <- train[,53]
+
+ccoef <- 2^seq(-5, 15, 2)
+gcoef <- 2^seq(-15, 3, 2)
+gsfit <- matrix(0, 11, 10)
+```
+
+```{r gridsearch}
+
+# if(is.factor(y) == TRUE){
+#    for (i in 1:11){
+#        for (j in 1:10){
+#            svmrun <- svm(x, y, type = "C-classification", cross = 10, 
+#                          gamma = gcoef[j], cost = ccoef[i])
+#            cfm <- table(y, svmrun$fitted)
+#            gsfit[i,j] <- sum(diag(cfm)) / sum(cfm)
+#        }
+#    }
+#}
+
+# svm.param <- which(gsfit == max(gsfit), arr.ind = T)[1,]
+
+modFit_svm <- svm(x, y, type = "C-classification", cross = 10, gamma = gcoef[svm.param[2]],
+                  cost = ccoef[svm.param[1]])
+
+pred_svm <- predict(modFit_svm, val[,-53])
+```
+
+This part of the code is commented out, because it takes multiple hours (in my case > 36h) to compute. 
+
+```{r svm2}
+confma_svm <- confusionMatrix(pred_svm, val$classe)
+confma_svm$overall["Accuracy"]
+```
+
+The SVM achieved a similar accuracy as the Random Forest model. When fitting an SVM, it is key to find a good combination between the kernel parameter gamma and the penalty parameter cost. This is done here using a so called grid search, where a lot of models are build (in this case 110) using different parameter combinations and the best one is selected for the final model. This is necessary for a good performance, which can be a huge drawback, because SVMs are quite demanding regarding computing capacity. The grid search performed in this study took over 36 hours to complete, while in comparison the Random Forest model took only a couple of minutes.    
+
+
+## Predicting on the test set
+
+A possible approach would now be to combine the three models to further increase the predictive capability, but since they all performed very well on their own, the Random Forest model, which was a bit more accurate on the validation set than the gbm and way faster regarding computation time than the SVM, was chosen for the application on the test data. The test set was left completely untouched for this analysis, so no preprocessing or predictor selection was done.
+
+```{r test}
+pred_test <- predict(modFit_rf, testing_raw)
+pred_test
+```
+
+## Source of the data
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+
